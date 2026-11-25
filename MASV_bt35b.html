@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Đồng hồ đếm ngược 10 phút</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #e6eee9;
+    --ink: #0f3d3e;
+    --soft: #5f7f7a;
+    --accent: #1f7a6d;
+    --warn: #e5412d;
+    --panel: #f6faf8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; place-items: center;
+    background: var(--bg); color: var(--ink);
+    font-family: "Archivo", system-ui, sans-serif;
+    transition: background .6s;
+  }
+  body.warning { background: #f6e3df; }
+  main {
+    width: min(92vw, 520px);
+    background: var(--panel);
+    border: 2px solid var(--ink);
+    border-radius: 28px;
+    padding: 36px 28px 30px;
+    text-align: center;
+  }
+  h1 { font-size: 1.1rem; font-weight: 500; margin: 0 0 18px; color: var(--soft); }
+  #display {
+    font-size: clamp(4.5rem, 24vw, 8rem);
+    font-weight: 800;
+    letter-spacing: -.03em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    margin: 0;
+  }
+  /* Dưới 1 phút: đổi màu + nhịp đập mỗi giây */
+  #display.warning { color: var(--warn); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.07); }
+  }
+  .bar { height: 8px; margin: 24px 0 26px; background: #cfdcd6; border-radius: 99px; overflow: hidden; }
+  #progress { height: 100%; width: 100%; background: var(--accent); transition: width .25s linear, background .4s; }
+  #progress.warning { background: var(--warn); }
+  .actions { display: flex; gap: 12px; justify-content: center; }
+  button {
+    font: inherit; font-weight: 800; font-size: 1rem;
+    padding: 12px 26px; border-radius: 99px; cursor: pointer;
+    border: 2px solid var(--ink); background: var(--ink); color: #fff;
+  }
+  button.ghost { background: transparent; color: var(--ink); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  #sync { margin: 20px 0 0; font-size: .85rem; color: var(--soft); }
+
+  dialog {
+    border: 2px solid var(--ink); border-radius: 24px;
+    padding: 32px 36px; text-align: center; max-width: 90vw;
+    background: var(--panel); color: var(--ink); font-family: inherit;
+  }
+  dialog::backdrop { background: rgba(15, 61, 62, .55); }
+  dialog h2 { margin: 0 0 8px; font-size: 1.6rem; }
+  dialog p { margin: 0 0 22px; color: var(--soft); }
+
+  @media (prefers-reduced-motion: reduce) {
+    #display.warning { animation: none; }
+    #progress { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Đếm ngược 10 phút</h1>
+  <p id="display" role="timer" aria-live="off">10:00</p>
+  <div class="bar"><div id="progress"></div></div>
+  <div class="actions">
+    <button id="toggle">Bắt đầu</button>
+    <button id="reset" class="ghost">Đặt lại</button>
+  </div>
+  <p id="sync">Đang đồng bộ giờ với server…</p>
+</main>
+
+<dialog id="modal">
+  <h2>Hết giờ!</h2>
+  <p>Thời gian 10 phút đã kết thúc.</p>
+  <button id="close">Đóng</button>
+</dialog>
+
+<script>
+(() => {
+  const TOTAL_MS = 10 * 60 * 1000;
+
+  const $ = (id) => document.getElementById(id);
+  const display = $("display"), progress = $("progress");
+  const toggleBtn = $("toggle"), resetBtn = $("reset");
+  const modal = $("modal"), syncEl = $("sync");
+
+  let intervalId = null;     // luôn giữ id để có thể clearInterval
+  let endTime = 0;           // mốc kết thúc (giờ server)
+  let remaining = TOTAL_MS;  // dùng khi tạm dừng
+  let offset = 0;            // lệch giữa giờ server và giờ máy (ms)
+
+  // Giờ "chuẩn" = giờ máy + độ lệch so với server
+  const now = () => Date.now() + offset;
+
+  // Đồng bộ giờ: đọc header Date của chính server đang host trang (Netlify)
+  async function syncWithServer() {
+    try {
+      const t0 = Date.now();
+      const res = await fetch(location.href, { method: "HEAD", cache: "no-store" });
+      const t1 = Date.now();
+      const header = res.headers.get("Date");
+      if (!header) throw new Error("no Date header");
+      // bù một nửa độ trễ mạng (round-trip / 2)
+      offset = new Date(header).getTime() + (t1 - t0) / 2 - t1;
+      syncEl.textContent = "Đã đồng bộ giờ với server (lệch " + Math.round(offset) + " ms)";
+    } catch (e) {
+      offset = 0;
+      syncEl.textContent = "Dùng giờ của thiết bị (chưa đồng bộ được server)";
+    }
+  }
+
+  function format(ms) {
+    const s = Math.ceil(ms / 1000);
+    const mm = String(Math.floor(s / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    return mm + ":" + ss;
+  }
+
+  function render(ms) {
+    display.textContent = format(ms);
+    document.title = format(ms) + " - Đếm ngược";
+    progress.style.width = (ms / TOTAL_MS * 100) + "%";
+    const low = ms <= 60 * 1000 && ms > 0;
+    display.classList.toggle("warning", low);
+    progress.classList.toggle("warning", low);
+    document.body.classList.toggle("warning", low);
+  }
+
+  function stop() {
+    if (intervalId !== null) {
+      clearInterval(intervalId);   // tránh memory leak / nhiều interval chạy chồng
+      intervalId = null;
+    }
+  }
+
+  function tick() {
+    remaining = Math.max(0, endTime - now());  // tính từ mốc cuối, không trừ dần
+    render(remaining);
+    if (remaining <= 0) {
+      stop();
+      toggleBtn.textContent = "Bắt đầu";
+      toggleBtn.disabled = true;
+      if (!modal.open) modal.showModal();
+    }
+  }
+
+  function start() {
+    if (intervalId !== null || remaining <= 0) return; // chặn tạo interval thứ hai
+    endTime = now() + remaining;
+    intervalId = setInterval(tick, 250);  // tick dày hơn 1s để không bị nhảy giây
+    toggleBtn.textContent = "Tạm dừng";
+    tick();
+  }
+
+  function pause() {
+    stop();
+    toggleBtn.textContent = "Tiếp tục";
+  }
+
+  function reset() {
+    stop();
+    remaining = TOTAL_MS;
+    toggleBtn.disabled = false;
+    toggleBtn.textContent = "Bắt đầu";
+    render(remaining);
+  }
+
+  toggleBtn.addEventListener("click", () => (intervalId === null ? start() : pause()));
+  resetBtn.addEventListener("click", reset);
+  $("close").addEventListener("click", () => { modal.close(); reset(); });
+  window.addEventListener("beforeunload", stop);
+
+  render(remaining);
+  syncWithServer();
+})();
+</script>
+</body>
+</html>
